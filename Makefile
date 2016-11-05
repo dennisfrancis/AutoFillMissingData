@@ -32,8 +32,6 @@
 #     
 #**************************************************************************
 
-# Builds the ProtocolHandlerAddon C++ component example of the SDK.
-
 PRJ=$(OO_SDK_HOME)
 SETTINGS=$(PRJ)/settings
 
