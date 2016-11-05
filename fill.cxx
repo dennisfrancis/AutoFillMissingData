@@ -65,7 +65,7 @@ void logError(const char* pStr);
 Reference< XModel > getModel( const Reference< XFrame >& rxFrame );
 bool getDataRange( const Reference< XModel >& rxModel, CellRangeAddress& rRangeExtended );
 Reference< XSpreadsheet > getSheet( const Reference< XModel >& rxModel, const sal_Int32 nSheet );
-sal_Bool getColColors( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, std::vector<Color>& rColBGColors );
+sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, std::vector<Color>& rColBGColors );
 sal_Bool setColColors( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, const std::vector<Color>& rColBGColors );
 
 void computeMissingValuesInColumnOUString( const Reference< XSpreadsheet >& rxSheet,
@@ -196,7 +196,7 @@ Any SAL_CALL FillMissingDataImpl::execute( const Sequence<NamedValue>& rArgs )
     }
 
     if ( aJobInfo.aEventName.equalsAscii("onFillMissingDataReq"))
-	colorData( aJobInfo );
+	fillData( aJobInfo );
     //logError("About to sleep for 5 seconds");
     //std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
@@ -270,7 +270,7 @@ OUString FillMissingDataImpl::validateGetInfo( const Sequence<NamedValue>& rArgs
     return OUString("");
 }
 
-void FillMissingDataImpl::colorData( const FillMissingDataImpl::FillMissingDataImplInfo& rJobInfo )
+void FillMissingDataImpl::fillData( const FillMissingDataImpl::FillMissingDataImplInfo& rJobInfo )
 {
     if ( !rJobInfo.xFrame.is() )
     {
@@ -306,7 +306,7 @@ void FillMissingDataImpl::colorData( const FillMissingDataImpl::FillMissingDataI
     std::vector<Color> aColBGColors(nNumCols);
 
     Reference< XSpreadsheet > xSheet = getSheet( xModel, aRange.Sheet );
-    sal_Bool bOK = getColColors( xSheet, aRange, aColBGColors );
+    sal_Bool bOK = fillAllColumns( xSheet, aRange, aColBGColors );
     if ( !bOK )
     {
 	logError("colorData : getColColors() failed");
@@ -527,7 +527,7 @@ Reference< XSpreadsheet > getSheet( const Reference< XModel >& rxModel, const sa
     return xSpreadsheet;
 }
 
-sal_Bool getColColors( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, std::vector<Color>& rColBGColors )
+sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, std::vector<Color>& rColBGColors )
 {
     sal_Int32 nNumCols = rRange.EndColumn - rRange.StartColumn + 1;
     sal_Int32 nNumRows = rRange.EndRow - rRange.StartRow; // Don't count the header

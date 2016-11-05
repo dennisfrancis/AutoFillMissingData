@@ -76,7 +76,7 @@ private:
     ::rtl::OUString validateGetInfo( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::NamedValue >& rArgs,
 				     FillMissingDataImplInfo& rJobInfo );
     
-    void colorData( const FillMissingDataImplInfo& rJobInfo );
+    void fillData( const FillMissingDataImplInfo& rJobInfo );
 };
 
 ::rtl::OUString FillMissingDataImpl_getImplementationName()
