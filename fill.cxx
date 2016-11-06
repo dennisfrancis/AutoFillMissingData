@@ -1,5 +1,5 @@
-#include <fill.hxx>
-#include <perf.hxx>
+#include "fill.hxx"
+#include "perf.hxx"
 
 #include <com/sun/star/beans/NamedValue.hpp>
 #include <com/sun/star/beans/XPropertySet.hpp>
@@ -16,7 +16,6 @@
 #include <com/sun/star/sheet/XCellRangeAddressable.hpp>
 #include <com/sun/star/sheet/XSpreadsheetDocument.hpp>
 #include <com/sun/star/sheet/XSpreadsheets.hpp>
-#include <com/sun/star/sheet/XSpreadsheet.hpp>
 #include <com/sun/star/sheet/XSheetCellCursor.hpp>
 #include <com/sun/star/sheet/XCellRangeData.hpp>
 
@@ -24,9 +23,6 @@
 #include <com/sun/star/container/XIndexAccess.hpp>
 
 #include <com/sun/star/table/XCellRange.hpp>
-#include <com/sun/star/table/CellRangeAddress.hpp>
-#include <com/sun/star/table/CellContentType.hpp>
-#include <com/sun/star/table/XCell.hpp>
 
 #include <com/sun/star/util/Color.hpp>
 
@@ -34,22 +30,16 @@
 #include <com/sun/star/document/XUndoManagerSupplier.hpp>
 
 #include <cppuhelper/supportsservice.hxx>
-#include <rtl/ustring.hxx>
-#include <rtl/ustrbuf.hxx>
 
 #include <vector>
 #include <unordered_set>
 #include <chrono>
 #include <thread>
 
-#define MAXROW 1048575
-#define MAXCOL 1023
-#define EMPTYSTRING OUString("__NA__")
-#define EMPTYDOUBLE -9999999.0
+#include "range.hxx"
+#include "preprocess.hxx"
+#include "knn.hxx"
 
-using rtl::OUString;
-using rtl::OUStringBuffer;
-using rtl::OUStringHash;
 using namespace com::sun::star::uno;
 using namespace com::sun::star::frame;
 using namespace com::sun::star::sheet;
@@ -68,7 +58,7 @@ using com::sun::star::document::XUndoManager;
 // This is the service name an Add-On has to implement
 #define SERVICE_NAME "com.sun.star.task.Job"
 
-enum DataType{ INTEGER, DOUBLE, STRING };
+
 
 void logError(const char* pStr);
 Reference< XModel > getModel( const Reference< XFrame >& rxFrame );
@@ -77,34 +67,12 @@ Reference< XSpreadsheet > getSheet( const Reference< XModel >& rxModel, const sa
 sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, std::vector<Color>& rColBGColors );
 sal_Bool setColColors( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, const std::vector<Color>& rColBGColors );
 
-void flagEmptyEntries( Sequence< Sequence< Any > >& rDataArray,
-		       const std::vector<DataType>& rColType,
-		       const std::vector< std::vector< sal_Int32 > >& rCol2BlankRowIdx );
-
-void imputeAllColumns( Sequence< Sequence< Any > >& rDataArray,
-		       std::vector<DataType>& rColType,
-		       const std::vector< std::vector< sal_Int32 > >& rCol2BlankRowIdx );
 
 void computeMissingValuesInColumn( Sequence< Sequence< Any > >& rDataArray,
 				   const sal_Int32 nLabelIdx,
 				   const std::unordered_set<sal_Int32>& rTestRowIndicesSet,
 				   const std::vector<DataType>& rColType,
 				   const std::vector<std::pair<double, double>>& rFeatureScales );
-
-bool imputeWithMode( Sequence< Sequence< Any > >& rDataArray,
-		     const sal_Int32 nColIdx,
-		     const DataType aType,
-		     const std::vector< sal_Int32 >& rEmptyRowIndices );
-
-
-bool imputeWithMedian( Sequence< Sequence< Any > >& rDataArray,
-		       const sal_Int32 nColIdx,
-		       const DataType aType,
-		       const std::vector< sal_Int32 >& rEmptyRowIndices );
-
-void calculateFeatureScales( Sequence< Sequence< Any > >& rDataArray,
-			     const std::vector<DataType>& rColType,
-			     std::vector< std::pair< double, double > >& rFeatureScales );
 
 
 
@@ -352,138 +320,15 @@ bool getDataRange( const Reference< XModel >& rxModel, CellRangeAddress& rRangeE
 	logError("getDataRange : Could not get sheet !");
 	return false;
     }
-    sal_Int32 nStartCol  = (rRangeExtended.StartColumn = aRange.StartColumn);
-    sal_Int32 nEndCol    = (rRangeExtended.EndColumn   = aRange.EndColumn);
-    sal_Int32 nStartRow  = (rRangeExtended.StartRow    = aRange.StartRow);
-    sal_Int32 nEndRow    = (rRangeExtended.EndRow      = aRange.EndRow);
 
+    rRangeExtended.Sheet       = aRange.Sheet;
+    rRangeExtended.StartColumn = aRange.StartColumn;
+    rRangeExtended.EndColumn   = aRange.EndColumn;
+    rRangeExtended.StartRow    = aRange.StartRow;
+    rRangeExtended.EndRow      = aRange.EndRow;
 
-    bool bStop = false;
-    // Extend nStartCol
-    for ( sal_Int32 nCol = nStartCol-1; (nCol >= 0 && !bStop); --nCol )
-    {
-	bool bColEmpty = true;
-	for ( sal_Int32 nRow = nStartRow; nRow <= nEndRow; ++nRow )
-	{
-	    Reference< XCell > xCell = xSheet->getCellByPosition(nCol, nRow);
-	    if ( !xCell.is() )
-	    {
-		printf("DEBUG>>> getDataRange : xCell(%d, %d) is invalid.\n", nCol, nRow );
-		fflush(stdout);
-	    }
-	    else if ( xCell->getType() != CellContentType_EMPTY )
-	    {
-		bColEmpty = false;
-		break;
-	    }
-	}
-	if ( bColEmpty )
-	{
-	    bStop = true;
-	    nStartCol = nCol + 1;
-	}
-	else if ( nCol == 0 )
-	    nStartCol = 0;
-    }
-
-    bStop = false;
-    // Extend nEndCol
-    for ( sal_Int32 nCol = nEndCol+1; (nCol <= MAXCOL && !bStop); ++nCol )
-    {
-	bool bColEmpty = true;
-	for ( sal_Int32 nRow = nStartRow; nRow <= nEndRow; ++nRow )
-	{
-	    Reference< XCell > xCell = xSheet->getCellByPosition(nCol, nRow);
-	    if ( !xCell.is() )
-	    {
-		printf("DEBUG>>> getDataRange : xCell(%d, %d) is invalid.\n", nCol, nRow );
-		fflush(stdout);
-	    }
-	    else if ( xCell->getType() != CellContentType_EMPTY )
-	    {
-		bColEmpty = false;
-		break;
-	    }
-	}
-	if ( bColEmpty )
-	{
-	    bStop = true;
-	    nEndCol = nCol - 1;
-	}
-	else if( nCol == MAXCOL )
-	    nEndCol = MAXCOL;
-    }
-
-    //printf("DEBUG>>> nStartCol = %d, nEndCol = %d\n", nStartCol, nEndCol); fflush(stdout);
-    
-    bStop = false;
-    // Extend nStartRow
-    for ( sal_Int32 nRow = nStartRow - 1; (nRow >= 0 && !bStop); --nRow )
-    {
-	bool bRowEmpty = true;
-	for ( sal_Int32 nCol = nStartCol; nCol <= nEndCol; ++nCol )
-	{
-	    Reference< XCell > xCell = xSheet->getCellByPosition(nCol, nRow);
-	    if ( !xCell.is() )
-	    {
-		printf("DEBUG>>> getDataRange : xCell(%d, %d) is invalid.\n", nCol, nRow );
-		fflush(stdout);
-	    }
-	    else if ( xCell->getType() != CellContentType_EMPTY )
-	    {
-		//printf("DEBUG>>> found cell at col = %d, row = %d non-empty\n", nCol, nRow ); fflush(stdout);
-		bRowEmpty = false;
-		break;
-	    }
-	}
-	if ( bRowEmpty )
-	{
-	    bStop = true;
-	    nStartRow = nRow + 1;
-	}
-	else if( nRow == 0 )
-	    nStartRow = 0;
-    }
-
-    //printf("DEBUG>>> nStartCol = %d, nEndCol = %d\n", nStartCol, nEndCol); fflush(stdout);
-    //printf("DEBUG>>> nStartRow = %d, nEndRow = %d\n", nStartRow, nEndRow); fflush(stdout);
-    
-    bStop = false;
-    // Extend nEndRow
-    for ( sal_Int32 nRow = nEndRow + 1; (nRow <= MAXROW && !bStop); ++nRow )
-    {
-	bool bRowEmpty = true;
-	for ( sal_Int32 nCol = nStartCol; nCol <= nEndCol; ++nCol )
-	{
-	    Reference< XCell > xCell = xSheet->getCellByPosition(nCol, nRow);
-	    if ( !xCell.is() )
-	    {
-		printf("DEBUG>>> getDataRange : xCell(%d, %d) is invalid.\n", nCol, nRow );
-		fflush(stdout);
-	    }
-	    else if ( xCell->getType() != CellContentType_EMPTY )
-	    {
-		bRowEmpty = false;
-		break;
-	    }
-	}
-	if ( bRowEmpty )
-	{
-	    bStop = true;
-	    nEndRow = nRow - 1;
-	}
-	else if ( nRow == MAXROW )
-	    nEndRow = MAXROW;
-    }
-
-    //printf("DEBUG>>> nStartCol = %d, nEndCol = %d\n", nStartCol, nEndCol); fflush(stdout);
-    //printf("DEBUG>>> nStartRow = %d, nEndRow = %d\n", nStartRow, nEndRow); fflush(stdout);
-
-    rRangeExtended.Sheet        = aRange.Sheet;
-    rRangeExtended.StartRow     = nStartRow;
-    rRangeExtended.EndRow       = nEndRow;
-    rRangeExtended.StartColumn  = nStartCol;
-    rRangeExtended.EndColumn    = nEndCol;
+    shrinkRangeToData( xSheet, rRangeExtended );
+    expandRangeToData( xSheet, rRangeExtended );
 
     return true;
 }
@@ -515,6 +360,11 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 {
     sal_Int32 nNumCols = rRange.EndColumn - rRange.StartColumn + 1;
     sal_Int32 nNumRows = rRange.EndRow - rRange.StartRow; // Don't count the header
+    if ( nNumRows < 10 )
+    {
+	printf( "DEBUG>>> Too few samples(%d) in the table, need at least 10.\n", nNumRows ); fflush(stdout);
+	return false;
+    }
     std::vector<bool> aIsColComplete( nNumCols );
     std::vector<DataType> aColType( nNumCols );
     std::vector<std::vector<sal_Int32>> aCol2BlankRowIdx( nNumCols );
@@ -616,24 +466,15 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 	    fflush(stdout);
 	    continue;
 	}
-	/*
+
 	std::unordered_set<sal_Int32> aTestRowIndicesSet;
 	for ( sal_Int32 nTestRowIdx : aTestRowIndices )
 	    aTestRowIndicesSet.insert( nTestRowIdx );
 
-	if ( aColType[nLabelIdx] == INTEGER || aColType[nLabelIdx] == DOUBLE )
-	{
-	    TimePerf aPerfDouble("computeMissingValuesInColumnDouble");
-	    computeMissingValuesInColumnDouble( aDataArray, nLabelIdx, aTestRowIndicesSet, aColType, aFeatureScales );
-	    aPerfDouble.Stop();
-	}
-	else if ( aColType[nLabelIdx] == STRING )
-	{
-	    TimePerf aPerfOUString("computeMissingValuesInColumnOUString");
-	    computeMissingValuesInColumnOUString( aDataArray, nLabelIdx, aTestRowIndicesSet, aColType, aFeatureScales );
-	    aPerfOUString.Stop();
-	}
-	*/
+	TimePerf aPerfDouble("computeMissingValuesInColumn");
+	computeMissingValuesInColumn( aDataArray, nLabelIdx, aTestRowIndicesSet, aColType, aFeatureScales );
+	aPerfDouble.Stop();
+
 	TimePerf aPerfWriteResult("WriteResult");
 	for ( sal_Int32 nRowIdx : aTestRowIndices )
 	{
@@ -667,45 +508,6 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
     return true;
 }
 
-void flagEmptyEntries( Sequence< Sequence< Any > >& rDataArray,
-		       const std::vector<DataType>& rColType,
-		       const std::vector< std::vector< sal_Int32 > >& rCol2BlankRowIdx )
-{
-    sal_Int32 nNumCols = rColType.size();
-    for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
-    {
-	for ( sal_Int32 nRowIdx : rCol2BlankRowIdx[nColIdx] )
-	{
-	    if ( rColType[nColIdx] == STRING )
-		rDataArray[nRowIdx][nColIdx] <<= EMPTYSTRING;
-	    else
-		rDataArray[nRowIdx][nColIdx] <<= EMPTYDOUBLE;
-	}
-    }
-}
-
-void imputeAllColumns( Sequence< Sequence< Any > >& rDataArray,
-		       std::vector<DataType>& rColType,
-		       const std::vector< std::vector< sal_Int32 > >& rCol2BlankRowIdx )
-{
-    sal_Int32 nNumCols = rColType.size();
-    for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
-    {
-	if ( rColType[nColIdx] == STRING )
-	    imputeWithMode( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] );
-	else if ( rColType[nColIdx] == DOUBLE )
-	    imputeWithMedian( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] );
-	else if ( rColType[nColIdx] == INTEGER )
-	{
-	    if ( !imputeWithMode( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] ) )
-	    {
-		// Better to treat the numbers as continuous rather than discrete classes.
-		rColType[nColIdx] = DOUBLE;
-		imputeWithMedian( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] );
-	    }
-	}
-    }
-}
 
 void computeMissingValuesInColumn( Sequence< Sequence< Any > >& rDataArray,
 				   const sal_Int32 nLabelIdx,
@@ -713,133 +515,9 @@ void computeMissingValuesInColumn( Sequence< Sequence< Any > >& rDataArray,
 				   const std::vector<DataType>& rColType,
 				   const std::vector<std::pair<double, double>>& rFeatureScales )
 {
-    
+    computeMissingValuesInColumnKNN( rDataArray, nLabelIdx, rTestRowIndicesSet, rColType, rFeatureScales );
 }
 
-bool imputeWithMode( Sequence< Sequence< Any > >& rDataArray,
-		     const sal_Int32 nColIdx,
-		     const DataType aType,
-		     const std::vector< sal_Int32 >& rEmptyRowIndices )
-{
-    std::unordered_multiset<OUString, OUStringHash> aStringMultiSet;
-    std::unordered_multiset<double>                 aDoubleMultiSet;
-    OUString aImputeString;
-    double   fImputeDouble;
-    sal_Int32 nMaxCount = 0;
-    sal_Int32 nNumRows = rDataArray.getLength();
-    for ( sal_Int32 nRowIdx = 0; nRowIdx < nNumRows; ++nRowIdx )
-    {
-	Any aElement = rDataArray[nRowIdx][nColIdx];
-	if ( ( aType == STRING && aElement == EMPTYSTRING ) ||
-	     ( aType == DOUBLE && aElement == EMPTYDOUBLE ) )
-	    continue;
-
-	sal_Int32 nCount = 0;
-	if ( aType == STRING )
-	{
-	    OUString aStr;
-	    aElement >>= aStr;
-	    aStringMultiSet.insert( aStr );
-	    nCount = aStringMultiSet.count( aStr );
-	}
-	else
-	{
-	    double fVal;
-	    aElement >>= fVal;
-	    aDoubleMultiSet.insert( fVal );
-	    nCount = aDoubleMultiSet.count( fVal );
-	}
-	if ( nCount > nMaxCount )
-	{
-	    if ( aType == STRING )
-		aElement >>= aImputeString;
-	    else
-		aElement >>= fImputeDouble;
-
-	    nMaxCount = nCount;
-	}
-    }
-
-    bool bGood = true;
-    if ( aType == INTEGER )
-    {
-	if ( nMaxCount < 2 ) // Ensure at least two samples of top class
-	    bGood = false;
-    }
-
-    if ( bGood )
-    {
-	if ( aType == STRING )
-	    for ( sal_Int32 nMissingIdx : rEmptyRowIndices )
-		rDataArray[nMissingIdx][nColIdx] <<= aImputeString;
-	else
-	    for ( sal_Int32 nMissingIdx : rEmptyRowIndices )
-		rDataArray[nMissingIdx][nColIdx] <<= fImputeDouble;
-    }
-
-    return bGood;
-}
-
-
-bool imputeWithMedian( Sequence< Sequence< Any > >& rDataArray,
-		       const sal_Int32 nColIdx,
-		       const DataType aType,
-		       const std::vector< sal_Int32 >& rEmptyRowIndices )
-{
-    // We are sure that this function is not called for Any == OUString
-    assert( aType != STRING && "imputeWithMedian called with type OUString !!!" );
-
-    sal_Int32 nNumRows = rDataArray.getLength();
-    sal_Int32 nNumEmptyElements = rEmptyRowIndices.size();
-    std::vector<double> aCopy( nNumRows );
-    for ( sal_Int32 nRowIdx = 0; nRowIdx < nNumRows; ++nRowIdx )
-	rDataArray[nRowIdx][nColIdx] >>= aCopy[nRowIdx];
-
-    std::sort( aCopy.begin(), aCopy.end() );
-    size_t nElements = nNumRows - nNumEmptyElements;
-    double fMedian;
-
-    if ( ( nElements % 2 ) == 0 )
-    {
-	double fMed1 = aCopy[nNumEmptyElements + (nElements/2)];
-	double fMed2 = aCopy[nNumEmptyElements + (nElements/2) - 1];
-	fMedian = 0.5*( fMed1 + fMed2 );
-    }
-    else
-	fMedian = aCopy[nNumEmptyElements + (nElements/2)];
-    
-    for ( sal_Int32 nMissingIdx : rEmptyRowIndices )
-	rDataArray[nMissingIdx][nColIdx] <<= fMedian;
-
-    return true;
-}
-
-void calculateFeatureScales( Sequence< Sequence< Any > >& rDataArray,
-			     const std::vector<DataType>& rColType,
-			     std::vector< std::pair< double, double > >& rFeatureScales )
-{
-    sal_Int32 nNumRows = rDataArray.getLength();
-    sal_Int32 nNumCols = rColType.size();
-
-    for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
-    {
-	if ( rColType[nColIdx] != DOUBLE )
-	    continue;
-	double fSum = 0.0, fSum2 = 0.0;
-	for ( sal_Int32 nRowIdx = 0; nRowIdx < nNumRows; ++nRowIdx )
-	{
-	    double fVal;
-	    rDataArray[nRowIdx][nColIdx] >>= fVal;
-	    fSum  += fVal;
-	    fSum2 += (fVal*fVal);
-	}
-	double fMean = fSum / static_cast<double>(nNumRows);
-	double fStd  = ( fSum2 / static_cast<double>(nNumRows) ) - ( fMean*fMean );
-	rFeatureScales[nColIdx].first  = fMean;
-	// Avoid 0 standard deviation condition.
-	rFeatureScales[nColIdx].second = ( fStd == 0.0 ) ? fMean : fStd;
-    }
-}
 
 
 sal_Bool setColColors( const Reference< XSpreadsheet >& rxSheet, const CellRangeAddress& rRange, const std::vector<Color>& rColBGColors )
