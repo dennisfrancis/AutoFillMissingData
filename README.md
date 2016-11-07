@@ -17,7 +17,7 @@ If you are interested in understanding how to build LibreOffice extensions like 
 
 As of now the extension uses a variation of kNN instance based regression and classification algorithms to predict missing data. It does auto tuning of k parameter to reduce overfitting using a validation set. Ability to tune the algorithm parameters via dialogue boxes is coming soon.
 
-A major issue is that the prebuilt extension (.oxt file) supports only modern GNU/Linux 64 bit systems comparable to Fedora 24. However support for MS Windows and MacOSX is planned.
+A major issue is that the prebuilt extension (.oxt file) supports only modern GNU/Linux 64 bit systems comparable to Fedora 24. However support for MS Windows and MacOSX is planned. Another caveat is that for the extension to work, at least 10 non blank samples(rows) are needed per feature(column) in the table.
 
 Pull requests are always welcome.
 
