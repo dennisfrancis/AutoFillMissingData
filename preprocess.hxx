@@ -2,6 +2,7 @@
 
 #include <cppu/unotype.hxx>
 #include <vector>
+#include <math.h>
 
 #define EMPTYSTRING OUString("__NA__")
 #define EMPTYDOUBLE -9999999.0
@@ -68,7 +69,7 @@ void imputeAllColumns( Sequence< Sequence< Any > >& rDataArray,
 	    if ( !imputeWithMode( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] ) )
 	    {
 		// Better to treat the numbers as continuous rather than discrete classes.
-		rColType[nColIdx] = DOUBLE;
+		//rColType[nColIdx] = DOUBLE;
 		imputeWithMedian( rDataArray, nColIdx, rColType[nColIdx], rCol2BlankRowIdx[nColIdx] );
 	    }
 	}
@@ -122,7 +123,7 @@ bool imputeWithMode( Sequence< Sequence< Any > >& rDataArray,
     bool bGood = true;
     if ( aType == INTEGER )
     {
-	if ( nMaxCount < 2 ) // Ensure at least two samples of top class
+	if ( nMaxCount < 3 ) // Ensure at least 3 samples of top class
 	    bGood = false;
     }
 
@@ -182,7 +183,7 @@ void calculateFeatureScales( Sequence< Sequence< Any > >& rDataArray,
 
     for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
     {
-	if ( rColType[nColIdx] != DOUBLE )
+	if ( rColType[nColIdx] == STRING )
 	    continue;
 	double fSum = 0.0, fSum2 = 0.0;
 	for ( sal_Int32 nRowIdx = 0; nRowIdx < nNumRows; ++nRowIdx )
@@ -193,7 +194,7 @@ void calculateFeatureScales( Sequence< Sequence< Any > >& rDataArray,
 	    fSum2 += (fVal*fVal);
 	}
 	double fMean = fSum / static_cast<double>(nNumRows);
-	double fStd  = ( fSum2 / static_cast<double>(nNumRows) ) - ( fMean*fMean );
+	double fStd  = sqrt( ( fSum2 / static_cast<double>(nNumRows) ) - ( fMean*fMean ) );
 	rFeatureScales[nColIdx].first  = fMean;
 	// Avoid 0 standard deviation condition.
 	rFeatureScales[nColIdx].second = ( fStd == 0.0 ) ? fMean : fStd;

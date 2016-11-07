@@ -65,7 +65,7 @@ include $(SETTINGS)/stdtarget.mk
 
 $(OUT_COMP_SLO)/%.$(OBJ_EXT) : %.cxx $(SDKTYPEFLAG) fill.hxx perf.hxx range.hxx datatypes.hxx knn.hxx preprocess.hxx
 	-$(MKDIR) $(subst /,$(PS),$(@D))
-	$(CC) $(CC_FLAGS) -std=c++11 $(CC_INCLUDES) -I$(OUT_COMP_INC) $(CC_DEFINES) $(CC_OUTPUT_SWITCH)$(subst /,$(PS),$@) $<
+	$(CC) -c -fpic -fvisibility=hidden -O3 -std=c++11 $(CC_INCLUDES) -I$(OUT_COMP_INC) $(CC_DEFINES) $(CC_OUTPUT_SWITCH)$(subst /,$(PS),$@) $<
 
 ifeq "$(OS)" "WIN"
 $(SHAREDLIB_OUT)/%.$(SHAREDLIB_EXT) : $(SLOFILES)

@@ -7,10 +7,39 @@
 #include "datatypes.hxx"
 
 #define K 5
+#define KSETSIZE 8
+#define NUMFOLD 3
+#define KMAX 9
 
 using com::sun::star::uno::Sequence;
 using com::sun::star::uno::Any;
 
+void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
+				      const sal_Int32 nLabelIdx,
+				      const std::unordered_set<sal_Int32>& rTestRowIndicesSet,
+				      const std::vector<DataType>& rColType,
+				      const std::vector<std::pair<double, double>>& rFeatureScales );
+
+sal_Int32 findBestK( const Sequence< Sequence< Any > >& rDataArray,
+		     const sal_Int32 nLabelIdx,
+		     const std::vector< sal_Int32 >& rDataIndices,
+		     const std::vector<DataType>& rColType,
+		     const std::vector<std::pair<double, double>>& rFeatureScales );
+
+void fitPredict( const sal_Int32 nKparam,
+		 const Sequence< Sequence< Any > >& rDataArray,
+		 const sal_Int32 nLabelIdx,
+		 const std::vector< sal_Int32 >& rTrainIndices,
+		 const std::vector< sal_Int32 >& rTestIndices,
+		 const std::vector<DataType>& rColType,
+		 const std::vector<std::pair<double, double>>& rFeatureScales,
+		 std::vector< Any >& rTargets );
+
+double getScore( const Sequence< Sequence< Any > >& rDataArray,
+		 const sal_Int32 nLabelIdx,
+		 const std::vector< sal_Int32 >& rValidIndices,
+		 const std::vector<DataType>& rColType,
+		 const std::vector< Any >& rPreds );
 
 double pround(double fX, sal_Int32 nPrecision)
 {
@@ -68,17 +97,118 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
     sal_Int32 nNumRows  = rDataArray.getLength();
     sal_Int32 nNumTest  = rTestRowIndicesSet.size();
     sal_Int32 nNumTrain = nNumRows - nNumTest;
-    std::vector< sal_Int32 > nTrainIndices( nNumTrain );
+    std::vector< sal_Int32 > aTrainIndices( nNumTrain );
+    std::vector< sal_Int32 > aTestIndices( nNumTest );
 
-    for ( sal_Int32 nIdx = 0, nIdxTrain = 0; nIdx < nNumRows; ++nIdx )
+    for ( sal_Int32 nIdx = 0, nIdxTrain = 0, nIdxTest = 0; nIdx < nNumRows; ++nIdx )
+    {
 	if ( rTestRowIndicesSet.count( nIdx ) == 0 )
-	    nTrainIndices[nIdxTrain++] = nIdx;
+	    aTrainIndices[nIdxTrain++] = nIdx;
+	else
+	    aTestIndices[nIdxTest++] = nIdx;
+    }
+
+    sal_Int32 nKparam = K;
+    sal_Int32 nNumValid  = ( nNumTrain / NUMFOLD );
+    sal_Int32 nNumTrain2 = nNumTrain - nNumValid;
+    if ( nNumTrain >= NUMFOLD && nNumTrain2 > KMAX )
+    {   // Find k param using NUMFOLD-crossvalidation.
+	nKparam = findBestK( rDataArray, nLabelIdx, aTrainIndices, rColType, rFeatureScales );
+    }
+    else
+    {
+	printf("DEBUG>>> computeMissingValuesInColumnKNN : nNumTrain2(%d) is lower than min reqd %d, skipping tuning step.\n",
+	       nNumTrain2, KMAX + 1);
+	fflush(stdout);
+    }
+
+    std::vector< Any > aTargets( nNumTest );
+    fitPredict( nKparam, rDataArray, nLabelIdx, aTrainIndices, aTestIndices, rColType, rFeatureScales, aTargets );
+    for ( sal_Int32 nIdx = 0; nIdx < nNumTest; ++nIdx )
+    {
+	sal_Int32 nTestIdx = aTestIndices[nIdx];
+	rDataArray[nTestIdx][nLabelIdx] = aTargets[nIdx];
+    }
+    
+}
+
+sal_Int32 findBestK( const Sequence< Sequence< Any > >& rDataArray,
+		     const sal_Int32 nLabelIdx,
+		     const std::vector< sal_Int32 >& rDataIndices,
+		     const std::vector<DataType>& rColType,
+		     const std::vector<std::pair<double, double>>& rFeatureScales )
+{
+    // Split dataset to train and validation sets.
+    std::vector< sal_Int32 > aDataSetIndices( rDataIndices );
+    
+    sal_Int32 nNumValid  = ( aDataSetIndices.size() / NUMFOLD );
+    sal_Int32 nNumTrain  = aDataSetIndices.size() - nNumValid;
+    std::vector< sal_Int32 > aTrainIndices( nNumTrain );
+    std::vector< sal_Int32 > aValidIndices( nNumValid );
+    std::vector< Any > aTargets( nNumValid );
+
+    sal_Int32 nKparamMax = nNumTrain - 1;
+    sal_Int32 nKparamSetSize = 5;
+    //sal_Int32 nKparamStepSize = nKparamMax / nKparamSetSize;
+    printf( "DEBUG>>> nKparamMax = %d, nKparamSetSize = %d\n", nKparamMax, nKparamSetSize ); fflush(stdout);
+
+    sal_Int32 nKmax = ( nNumTrain / rColType.size() );
+    std::vector< sal_Int32 > aKparamSet = { 5, (5 + nKmax)/2, nKmax };
+
+    sal_Int32 nBestK = aKparamSet[0];
+    double fBestScore = -1.0;
+
+    printf("DEBUG>>> Finding best K for nLabelIdx = %d using %d-Fold CV\n", nLabelIdx, NUMFOLD ); fflush(stdout);
+    
+    for ( sal_Int32 nCandKparam : aKparamSet )
+    {
+	double fCandAvgScore = 0.0;
+	//for ( sal_Int32 nFold = 1; nFold <= NUMFOLD; ++nFold )
+	{
+	    std::random_shuffle( aDataSetIndices.begin(), aDataSetIndices.end() );
+	    for ( sal_Int32 nIdx = 0; nIdx < nNumValid; ++nIdx )
+		aValidIndices[nIdx] = aDataSetIndices[nIdx];
+	    for ( sal_Int32 nIdx = nNumValid; nIdx < aDataSetIndices.size(); ++nIdx )
+		aTrainIndices[nIdx - nNumValid] = aDataSetIndices[nIdx];
+
+	    fitPredict( nCandKparam, rDataArray, nLabelIdx, aTrainIndices, aValidIndices, rColType, rFeatureScales, aTargets );
+	
+	    double fCandFoldScore = getScore( rDataArray, nLabelIdx, aValidIndices, rColType, aTargets );
+	    fCandAvgScore += fCandFoldScore;
+	}
+	//fCandAvgScore /= NUMFOLD;
+
+	printf("DEBUG>>>    For K = %d, avg score = %.4f\n", nCandKparam, fCandAvgScore ); fflush(stdout);
+	if ( fCandAvgScore >= fBestScore ) // Equality because of Occam's razor
+	{
+	    fBestScore = fCandAvgScore;
+	    nBestK     = nCandKparam;
+	}
+    }
+    printf("DEBUG>>>     Best K = %d =======\n", nBestK ); fflush(stdout);
+
+    return nBestK;
+}
+
+void fitPredict( const sal_Int32 nKparam,
+		 const Sequence< Sequence< Any > >& rDataArray,
+		 const sal_Int32 nLabelIdx,
+		 const std::vector< sal_Int32 >& rTrainIndices,
+		 const std::vector< sal_Int32 >& rTestIndices,
+		 const std::vector<DataType>& rColType,
+		 const std::vector<std::pair<double, double>>& rFeatureScales,
+		 std::vector< Any >& rTargets )
+{
+    sal_Int32 nNumTrain = rTrainIndices.size();
+    sal_Int32 nNumTest  = rTestIndices.size();
+    sal_Int32 nNumCols  = rColType.size();
 
     std::vector<std::pair<double, sal_Int32>> aDistances( nNumTrain );
-    for ( sal_Int32 nTestIdx : rTestRowIndicesSet )
+    sal_Int32 nTargetIdx = 0;
+    for ( sal_Int32 nTestIdx : rTestIndices )
     {
 	sal_Int32 nDistanceIdx = 0;
-	for ( sal_Int32 nTrainIdx : nTrainIndices )
+	for ( sal_Int32 nTrainIdx : rTrainIndices )
 	{
 	    double fDistance2 = 0.0;
 	    for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
@@ -87,7 +217,7 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 		if( nColIdx == nLabelIdx )
 		    continue;
 		
-		if ( rColType[nColIdx] == DOUBLE )
+		if ( rColType[nColIdx] == DOUBLE || rColType[nColIdx] == INTEGER )
 		{
 		    double fTrainVal, fTestVal, fDiff;
 		    rDataArray[nTrainIdx][nColIdx] >>= fTrainVal;
@@ -124,7 +254,7 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 	    double fTarget = 0;
 	    double fScale = 0;
 	    //sal_Int32 nPrecision = 0;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < K; ++nCandIdx )
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
 	    {
 		double fSimilarity = exp( -aDistances[nCandIdx].first );
 		if ( fSimilarity < 1.0E-10 )
@@ -145,14 +275,15 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 	    fTarget = fTarget / fScale;
 	    //printf("DEBUG>>> Testidx = %d : found target = %.6f, scale = %.6f precision = %d\n", nTestIdx, fTarget, fScale, nPrecision); fflush(stdout);
 	    //fTarget = pround( fTarget, nPrecision );
-	    rDataArray[nTestIdx][nLabelIdx] <<= fTarget;
+	    rTargets[nTargetIdx++] <<= fTarget;
 	}
+	
 	else if ( rColType[nLabelIdx] == INTEGER )
 	{
 	    std::unordered_multiset<double> aVotes;
 	    sal_Int32 nMaxCount = 0;
 	    double fTarget = 0.0;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < K; ++nCandIdx )
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
 	    {
 		double fCandTarget;
 		// Read the label/target of the candidate train point
@@ -166,14 +297,14 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 		}
 	    }
 
-	    rDataArray[nTestIdx][nLabelIdx] <<= fTarget;
+	    rTargets[nTargetIdx++] <<= fTarget;
 	}
 	else
 	{
 	    std::unordered_multiset<OUString, OUStringHash> aVotes;
 	    sal_Int32 nMaxCount = 0;
 	    OUString aTarget;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < K; ++nCandIdx )
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
 	    {
 		OUString aCandTarget;
 		// Read the label/target of the candidate train point
@@ -187,7 +318,64 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 		}
 	    }
 
-	    rDataArray[nTestIdx][nLabelIdx] <<= aTarget;
+	    rTargets[nTargetIdx++] <<= aTarget;
 	}
     }
+}
+
+// Outputs score in range [-Inf,1], 1 being the best score.
+double getScore( const Sequence< Sequence< Any > >& rDataArray,
+		 const sal_Int32 nLabelIdx,
+		 const std::vector< sal_Int32 >& rValidIndices,
+		 const std::vector<DataType>& rColType,
+		 const std::vector< Any >& rPreds )
+{
+    sal_Int32 nNumValid = rValidIndices.size();
+    double fScore = 0.0;
+    // Calculate R^2 score.
+    if ( rColType[nLabelIdx] == DOUBLE )
+    {
+	double fAvgTarget = 0.0;
+	for ( sal_Int32 nValidIdx : rValidIndices )
+	{
+	    double fTarget;
+	    rDataArray[nValidIdx][nLabelIdx] >>= fTarget;
+	    fAvgTarget += fTarget;
+	}
+	
+	fAvgTarget /= nNumValid;
+	sal_Int32 nPredIdx = 0;
+	double fNum = 0.0, fDen = 0.0;
+	for ( sal_Int32 nValidIdx : rValidIndices )
+	{
+	    double fPred, fTarget;
+	    rDataArray[nValidIdx][nLabelIdx] >>= fTarget;
+	    rPreds[nPredIdx++] >>= fPred;
+
+	    double fDiff1 = ( fTarget - fPred );
+	    double fDiff2 = ( fTarget - fAvgTarget );
+	    fNum += ( fDiff1 * fDiff1 );
+	    fDen += ( fDiff2 * fDiff2 );
+	}
+
+	if ( fDen == 0.0 )
+	    fScore = 1.0;
+	else
+	    fScore = 1 - ( fNum / fDen );
+    }
+    else
+    {
+	double fNumTruePositives = 0.0;
+	sal_Int32 nPredIdx = 0;
+	for ( sal_Int32 nValidIdx : rValidIndices )
+	{
+	    if ( rDataArray[nValidIdx][nLabelIdx] ==
+		 rPreds[nPredIdx++] )
+		fNumTruePositives += 1.0;
+	}
+
+	fScore = ( fNumTruePositives / nNumValid );
+    }
+
+    return fScore;
 }

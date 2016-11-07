@@ -379,6 +379,7 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 	    aType = INTEGER;
 	    bool bIsComplete = true;
 	    std::vector<sal_Int32> aBlankRowIdx;
+	    double fMin = 1.0E10, fMax = -1.0E10;
 	    for ( sal_Int32 nRow = rRange.StartRow+1, nRowIdx = 0; nRow <= rRange.EndRow; ++nRow, ++nRowIdx )
 	    {
 		Reference< XCell > xCell = rxSheet->getCellByPosition(nCol, nRow);
@@ -395,6 +396,11 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 			double fVal = xCell->getValue();
 			if ( fVal != static_cast<double>(static_cast<sal_Int64>(fVal)) )
 			    aType = DOUBLE;
+			if ( aType == INTEGER )
+			{
+			    fMin = ( fMin > fVal ) ? fVal : fMin;
+			    fMax = ( fMax < fVal ) ? fVal : fMax;
+			}
 		    }
 		    else if ( xCell->getType() == CellContentType_EMPTY )
 		    {
@@ -403,6 +409,9 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 		    }
 		}
 	    }
+
+	    if ( aType == INTEGER && (fMax - fMin) > 100.0 )
+		aType = DOUBLE;
 	    
 	    aIsColComplete[nColIdx]    = bIsComplete;
 	    aColType[nColIdx]          = aType;
@@ -448,6 +457,9 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
     imputeAllColumns( aDataArray, aColType, aCol2BlankRowIdx );
     std::vector<std::pair<double, double>> aFeatureScales( nNumCols );
     calculateFeatureScales( aDataArray, aColType, aFeatureScales );
+    for ( sal_Int32 nColIdx = 0; nColIdx < nNumCols; ++nColIdx )
+	printf("DEBUG>>> col %d has type %d, mean = %.4f, std = %.5f\n", nColIdx, aColType[nColIdx], aFeatureScales[nColIdx].first, aFeatureScales[nColIdx].second);
+    fflush(stdout);
     aPerfPreprocess.Stop();
 
     for ( sal_Int32 nLabelIdx = 0; nLabelIdx < nNumCols; ++nLabelIdx )
@@ -473,11 +485,14 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 
 	TimePerf aPerfDouble("computeMissingValuesInColumn");
 	computeMissingValuesInColumn( aDataArray, nLabelIdx, aTestRowIndicesSet, aColType, aFeatureScales );
+	if ( aColType[nLabelIdx] == DOUBLE )
+	    calculateFeatureScales( aDataArray, aColType, aFeatureScales );
 	aPerfDouble.Stop();
 
 	TimePerf aPerfWriteResult("WriteResult");
 	for ( sal_Int32 nRowIdx : aTestRowIndices )
 	{
+	    
 	    Reference< XCell > xCell = rxSheet->getCellByPosition( nLabelIdx + rRange.StartColumn, nRowIdx + rRange.StartRow + 1 );
 	    if ( aColType[nLabelIdx] == STRING )
 	    {
@@ -499,6 +514,7 @@ sal_Bool fillAllColumns( const Reference< XSpreadsheet >& rxSheet, const CellRan
 		continue;
 	    }
 	    xPropSet->setPropertyValue( "CellBackColor", makeAny( 0xee3333 ) );
+	    
 	}
 	aPerfWriteResult.Stop();
 	
