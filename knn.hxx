@@ -9,7 +9,7 @@
 #define K 5
 #define KSETSIZE 8
 #define NUMFOLD 3
-#define KMAX 9
+#define KMAX 15
 
 using com::sun::star::uno::Sequence;
 using com::sun::star::uno::Any;
@@ -26,13 +26,20 @@ sal_Int32 findBestK( const Sequence< Sequence< Any > >& rDataArray,
 		     const std::vector<DataType>& rColType,
 		     const std::vector<std::pair<double, double>>& rFeatureScales );
 
+
+void getDistancesMatrix( const Sequence< Sequence< Any > >& rDataArray,
+			 const sal_Int32 nLabelIdx,
+			 const std::vector< sal_Int32 >& rTrainIndices,
+			 const std::vector< sal_Int32 >& rTestIndices,
+			 const std::vector<DataType>& rColType,
+			 const std::vector<std::pair<double, double>>& rFeatureScales,
+			 std::vector<std::vector<std::pair<double, sal_Int32>>>& rDistancesMatrix );
+
 void fitPredict( const sal_Int32 nKparam,
 		 const Sequence< Sequence< Any > >& rDataArray,
 		 const sal_Int32 nLabelIdx,
-		 const std::vector< sal_Int32 >& rTrainIndices,
-		 const std::vector< sal_Int32 >& rTestIndices,
 		 const std::vector<DataType>& rColType,
-		 const std::vector<std::pair<double, double>>& rFeatureScales,
+		 const std::vector<std::vector<std::pair<double, sal_Int32>>>& rDistancesMatrix,
 		 std::vector< Any >& rTargets );
 
 double getScore( const Sequence< Sequence< Any > >& rDataArray,
@@ -122,8 +129,12 @@ void computeMissingValuesInColumnKNN( Sequence< Sequence< Any > >& rDataArray,
 	fflush(stdout);
     }
 
+    std::vector<std::vector<std::pair<double, sal_Int32>>> aDistancesMatrix( nNumTest );
+    getDistancesMatrix( rDataArray, nLabelIdx, aTrainIndices,
+			aTestIndices, rColType, rFeatureScales,
+			aDistancesMatrix );
     std::vector< Any > aTargets( nNumTest );
-    fitPredict( nKparam, rDataArray, nLabelIdx, aTrainIndices, aTestIndices, rColType, rFeatureScales, aTargets );
+    fitPredict( nKparam, rDataArray, nLabelIdx, rColType, aDistancesMatrix, aTargets );
     for ( sal_Int32 nIdx = 0; nIdx < nNumTest; ++nIdx )
     {
 	sal_Int32 nTestIdx = aTestIndices[nIdx];
@@ -147,36 +158,29 @@ sal_Int32 findBestK( const Sequence< Sequence< Any > >& rDataArray,
     std::vector< sal_Int32 > aValidIndices( nNumValid );
     std::vector< Any > aTargets( nNumValid );
 
-    sal_Int32 nKparamMax = nNumTrain - 1;
-    sal_Int32 nKparamSetSize = 5;
-    //sal_Int32 nKparamStepSize = nKparamMax / nKparamSetSize;
-    printf( "DEBUG>>> nKparamMax = %d, nKparamSetSize = %d\n", nKparamMax, nKparamSetSize ); fflush(stdout);
-
-    sal_Int32 nKmax = ( nNumTrain / rColType.size() );
-    std::vector< sal_Int32 > aKparamSet = { 5, (5 + nKmax)/2, nKmax };
+    std::vector< sal_Int32 > aKparamSet = { 3, 5, 7, 9, 11, 13, KMAX };
 
     sal_Int32 nBestK = aKparamSet[0];
     double fBestScore = -1.0;
 
-    printf("DEBUG>>> Finding best K for nLabelIdx = %d using %d-Fold CV\n", nLabelIdx, NUMFOLD ); fflush(stdout);
-    
+    printf("DEBUG>>> Finding best K for nLabelIdx = %d using validation set\n", nLabelIdx); fflush(stdout);
+
+    std::random_shuffle( aDataSetIndices.begin(), aDataSetIndices.end() );
+    for ( sal_Int32 nIdx = 0; nIdx < nNumValid; ++nIdx )
+	aValidIndices[nIdx] = aDataSetIndices[nIdx];
+    for ( sal_Int32 nIdx = nNumValid; nIdx < aDataSetIndices.size(); ++nIdx )
+	aTrainIndices[nIdx - nNumValid] = aDataSetIndices[nIdx];
+
+    std::vector<std::vector<std::pair<double, sal_Int32>>> aDistancesMatrix( nNumValid );
+    getDistancesMatrix( rDataArray, nLabelIdx, aTrainIndices,
+			aValidIndices, rColType, rFeatureScales,
+			aDistancesMatrix );
     for ( sal_Int32 nCandKparam : aKparamSet )
     {
-	double fCandAvgScore = 0.0;
-	//for ( sal_Int32 nFold = 1; nFold <= NUMFOLD; ++nFold )
-	{
-	    std::random_shuffle( aDataSetIndices.begin(), aDataSetIndices.end() );
-	    for ( sal_Int32 nIdx = 0; nIdx < nNumValid; ++nIdx )
-		aValidIndices[nIdx] = aDataSetIndices[nIdx];
-	    for ( sal_Int32 nIdx = nNumValid; nIdx < aDataSetIndices.size(); ++nIdx )
-		aTrainIndices[nIdx - nNumValid] = aDataSetIndices[nIdx];
 
-	    fitPredict( nCandKparam, rDataArray, nLabelIdx, aTrainIndices, aValidIndices, rColType, rFeatureScales, aTargets );
+	fitPredict( nCandKparam, rDataArray, nLabelIdx, rColType, aDistancesMatrix, aTargets );
 	
-	    double fCandFoldScore = getScore( rDataArray, nLabelIdx, aValidIndices, rColType, aTargets );
-	    fCandAvgScore += fCandFoldScore;
-	}
-	//fCandAvgScore /= NUMFOLD;
+	double fCandAvgScore = getScore( rDataArray, nLabelIdx, aValidIndices, rColType, aTargets );
 
 	printf("DEBUG>>>    For K = %d, avg score = %.4f\n", nCandKparam, fCandAvgScore ); fflush(stdout);
 	if ( fCandAvgScore >= fBestScore ) // Equality because of Occam's razor
@@ -193,21 +197,108 @@ sal_Int32 findBestK( const Sequence< Sequence< Any > >& rDataArray,
 void fitPredict( const sal_Int32 nKparam,
 		 const Sequence< Sequence< Any > >& rDataArray,
 		 const sal_Int32 nLabelIdx,
-		 const std::vector< sal_Int32 >& rTrainIndices,
-		 const std::vector< sal_Int32 >& rTestIndices,
 		 const std::vector<DataType>& rColType,
-		 const std::vector<std::pair<double, double>>& rFeatureScales,
+		 const std::vector<std::vector<std::pair<double, sal_Int32>>>& rDistancesMatrix,
 		 std::vector< Any >& rTargets )
+{
+    sal_Int32 nNumTest  = rDistancesMatrix.size();
+
+    for ( sal_Int32 nTargetIdx = 0; nTargetIdx < nNumTest; ++nTargetIdx )
+    {
+
+	if ( rColType[nLabelIdx] == DOUBLE )
+	{
+	    double fTarget = 0;
+	    double fScale = 0;
+	    //sal_Int32 nPrecision = 0;
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
+	    {
+		double fSimilarity = exp( -rDistancesMatrix[nTargetIdx][nCandIdx].first );
+		if ( fSimilarity < 1.0E-10 )
+		    fSimilarity = 1.0E-10;
+		double fCandTarget;
+		// Read the label/target of the candidate train point
+		rDataArray[rDistancesMatrix[nTargetIdx][nCandIdx].second][nLabelIdx] >>= fCandTarget;
+		/*sal_Int32 nCandPrec = getPrecision( fCandTarget );
+		if ( nCandPrec > nPrecision )
+		    nPrecision = nCandPrec;
+		*/
+
+		//printf("DEBUG>>> Testidx = %d : Cand %d has fSimilarity = %.6f, fCandTarget = %.4f\n", nTestIdx, nCandIdx, fSimilarity, fCandTarget); fflush(stdout);
+		fTarget += ( fSimilarity * fCandTarget );
+		fScale  += fSimilarity;
+	    }
+	    // Find the weighted target for the test point.
+	    fTarget = fTarget / fScale;
+	    //printf("DEBUG>>> Testidx = %d : found target = %.6f, scale = %.6f precision = %d\n", nTestIdx, fTarget, fScale, nPrecision); fflush(stdout);
+	    //fTarget = pround( fTarget, nPrecision );
+	    rTargets[nTargetIdx] <<= fTarget;
+	}
+	
+	else if ( rColType[nLabelIdx] == INTEGER )
+	{
+	    std::unordered_multiset<double> aVotes;
+	    sal_Int32 nMaxCount = 0;
+	    double fTarget = 0.0;
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
+	    {
+		double fCandTarget;
+		// Read the label/target of the candidate train point
+		rDataArray[rDistancesMatrix[nTargetIdx][nCandIdx].second][nLabelIdx] >>= fCandTarget;
+		aVotes.insert( fCandTarget );
+		sal_Int32 nCount = aVotes.count( fCandTarget );
+		if ( nCount > nMaxCount )
+		{
+		    nMaxCount = nCount;
+		    fTarget   = fCandTarget;
+		}
+	    }
+
+	    rTargets[nTargetIdx] <<= fTarget;
+	}
+	else
+	{
+	    std::unordered_multiset<OUString, OUStringHash> aVotes;
+	    sal_Int32 nMaxCount = 0;
+	    OUString aTarget;
+	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
+	    {
+		OUString aCandTarget;
+		// Read the label/target of the candidate train point
+		rDataArray[rDistancesMatrix[nTargetIdx][nCandIdx].second][nLabelIdx] >>= aCandTarget;
+		aVotes.insert( aCandTarget );
+		sal_Int32 nCount = aVotes.count( aCandTarget );
+		if ( nCount > nMaxCount )
+		{
+		    nMaxCount = nCount;
+		    aTarget   = aCandTarget;
+		}
+	    }
+
+	    rTargets[nTargetIdx] <<= aTarget;
+	}
+
+    }
+}
+
+void getDistancesMatrix( const Sequence< Sequence< Any > >& rDataArray,
+			 const sal_Int32 nLabelIdx,
+			 const std::vector< sal_Int32 >& rTrainIndices,
+			 const std::vector< sal_Int32 >& rTestIndices,
+			 const std::vector<DataType>& rColType,
+			 const std::vector<std::pair<double, double>>& rFeatureScales,
+			 std::vector<std::vector<std::pair<double, sal_Int32>>>& rDistancesMatrix )
 {
     sal_Int32 nNumTrain = rTrainIndices.size();
     sal_Int32 nNumTest  = rTestIndices.size();
     sal_Int32 nNumCols  = rColType.size();
+    for ( sal_Int32 nIdx = 0; nIdx < nNumTest; ++nIdx )
+	rDistancesMatrix[nIdx].resize( nNumTrain );
 
-    std::vector<std::pair<double, sal_Int32>> aDistances( nNumTrain );
-    sal_Int32 nTargetIdx = 0;
+    sal_Int32 nDistanceIdxTest = 0;
     for ( sal_Int32 nTestIdx : rTestIndices )
     {
-	sal_Int32 nDistanceIdx = 0;
+	sal_Int32 nDistanceIdxTrain = 0;
 	for ( sal_Int32 nTrainIdx : rTrainIndices )
 	{
 	    double fDistance2 = 0.0;
@@ -239,87 +330,16 @@ void fitPredict( const sal_Int32 nKparam,
 		}
 	    }
 
-	    aDistances[nDistanceIdx].first  = fDistance2;
-	    aDistances[nDistanceIdx].second = nTrainIdx;
-	    ++nDistanceIdx;
+	    rDistancesMatrix[nDistanceIdxTest][nDistanceIdxTrain].first  = fDistance2;
+	    rDistancesMatrix[nDistanceIdxTest][nDistanceIdxTrain].second = nTrainIdx;
+	    ++nDistanceIdxTrain;
 	    // Finished calculating distance from test point to one train point.
 	}
 
 	// Finished calculating distance from test point to all train points.
 
-	std::sort( aDistances.begin(), aDistances.end() );
-
-	if ( rColType[nLabelIdx] == DOUBLE )
-	{
-	    double fTarget = 0;
-	    double fScale = 0;
-	    //sal_Int32 nPrecision = 0;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
-	    {
-		double fSimilarity = exp( -aDistances[nCandIdx].first );
-		if ( fSimilarity < 1.0E-10 )
-		    fSimilarity = 1.0E-10;
-		double fCandTarget;
-		// Read the label/target of the candidate train point
-		rDataArray[aDistances[nCandIdx].second][nLabelIdx] >>= fCandTarget;
-		/*sal_Int32 nCandPrec = getPrecision( fCandTarget );
-		if ( nCandPrec > nPrecision )
-		    nPrecision = nCandPrec;
-		*/
-		    
-		//printf("DEBUG>>> Testidx = %d : Cand %d has fSimilarity = %.6f, fCandTarget = %.4f\n", nTestIdx, nCandIdx, fSimilarity, fCandTarget); fflush(stdout);
-		fTarget += ( fSimilarity * fCandTarget );
-		fScale  += fSimilarity;
-	    }
-	    // Find the weighted target for the test point.
-	    fTarget = fTarget / fScale;
-	    //printf("DEBUG>>> Testidx = %d : found target = %.6f, scale = %.6f precision = %d\n", nTestIdx, fTarget, fScale, nPrecision); fflush(stdout);
-	    //fTarget = pround( fTarget, nPrecision );
-	    rTargets[nTargetIdx++] <<= fTarget;
-	}
-	
-	else if ( rColType[nLabelIdx] == INTEGER )
-	{
-	    std::unordered_multiset<double> aVotes;
-	    sal_Int32 nMaxCount = 0;
-	    double fTarget = 0.0;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
-	    {
-		double fCandTarget;
-		// Read the label/target of the candidate train point
-		rDataArray[aDistances[nCandIdx].second][nLabelIdx] >>= fCandTarget;
-		aVotes.insert( fCandTarget );
-		sal_Int32 nCount = aVotes.count( fCandTarget );
-		if ( nCount > nMaxCount )
-		{
-		    nMaxCount = nCount;
-		    fTarget   = fCandTarget;
-		}
-	    }
-
-	    rTargets[nTargetIdx++] <<= fTarget;
-	}
-	else
-	{
-	    std::unordered_multiset<OUString, OUStringHash> aVotes;
-	    sal_Int32 nMaxCount = 0;
-	    OUString aTarget;
-	    for ( sal_Int32 nCandIdx = 0; nCandIdx < nKparam; ++nCandIdx )
-	    {
-		OUString aCandTarget;
-		// Read the label/target of the candidate train point
-		rDataArray[aDistances[nCandIdx].second][nLabelIdx] >>= aCandTarget;
-		aVotes.insert( aCandTarget );
-		sal_Int32 nCount = aVotes.count( aCandTarget );
-		if ( nCount > nMaxCount )
-		{
-		    nMaxCount = nCount;
-		    aTarget   = aCandTarget;
-		}
-	    }
-
-	    rTargets[nTargetIdx++] <<= aTarget;
-	}
+	std::sort( rDistancesMatrix[nDistanceIdxTest].begin(), rDistancesMatrix[nDistanceIdxTest].end() );
+	++nDistanceIdxTest;
     }
 }
 
