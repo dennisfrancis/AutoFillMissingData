@@ -15,7 +15,7 @@ To use this extension on some data in a sheet in LibreOffice, place the cursor o
 This project is currently alpha and under heavy development. Full source code is made available under [GPL3 license](https://www.gnu.org/licenses/gpl-3.0.en.html).
 If you are interested in understanding how to build LibreOffice extensions like this, I have a blog for that at [https://niocs.github.io/LOBook/extensions/index.html](https://niocs.github.io/LOBook/extensions/index.html)
 
-As of now the extension uses a variation of kNN instance based regression and classification algorithms to predict missing data. It does auto tuning of k parameter to reduce overfitting using a validation set. Ability to tune the algorithm parameters via dialogue boxes is coming soon.
+As of now the extension uses a variation of kNN instance based regression and classification algorithms to predict missing data. It does auto tuning of k parameter(number of nearest neighbors) to reduce overfitting using a validation set. Ability to tune the algorithm parameters via dialogue boxes is coming soon.
 
 A major issue is that the prebuilt extension (.oxt file) supports only modern GNU/Linux 64 bit systems comparable to Fedora 24. However support for MS Windows and MacOSX is planned. Another caveat is that for the extension to work, at least 10 non blank samples(rows) are needed per feature(column) in the table.
 
