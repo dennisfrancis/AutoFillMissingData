@@ -12,8 +12,7 @@ $ unopkg install ./AutoFillMissingData.oxt
 To use this extension on some data in a sheet in LibreOffice, place the cursor on any cell inside your table with data ( no need to select the whole table ) and go to the menu `Missing data` and click on `Fill missing data`.
 
 
-This project is currently alpha and under heavy development. Full source code is made available under [GPL3 license](https://www.gnu.org/licenses/gpl-3.0.en.html).
-If you are interested in understanding how to build LibreOffice extensions like this, I have a blog for that at [https://niocs.github.io/LOBook/extensions/index.html](https://niocs.github.io/LOBook/extensions/index.html)
+This project is currently alpha and under heavy development. Full source code is made available under [GPL3 license](https://www.gnu.org/licenses/gpl-3.0.en.html). Whole of the project was written from scratch and it does not depend on any Machine Learning or Linear Algebra library. If you are interested in understanding how to build LibreOffice extensions like this, I have a blog for that at [https://niocs.github.io/LOBook/extensions/index.html](https://niocs.github.io/LOBook/extensions/index.html)
 
 As of now the extension uses a variation of kNN instance based regression and classification algorithms to predict missing data. It does auto tuning of k parameter(number of nearest neighbors) to reduce overfitting using a validation set. Ability to tune the algorithm parameters via dialogue boxes is coming soon.
 
