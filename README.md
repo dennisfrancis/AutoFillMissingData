@@ -18,6 +18,19 @@ As of now the extension uses a variation of kNN instance based regression and cl
 
 A major issue is that the prebuilt extension (.oxt file) supports only modern GNU/Linux 64 bit systems comparable to Fedora 24. However support for MS Windows and MacOSX is planned. Another caveat is that for the extension to work, at least 10 non blank samples(rows) are needed per feature(column) in the table.
 
-Pull requests are always welcome.
+## Building the extension from source
 
-Watch this space for feature updates !
+First you need to setup LibreOffice SDK as per the instruction in [http://api.libreoffice.org/docs/install.html](http://api.libreoffice.org/docs/install.html).
+Then do the below :
+
+```
+$ cd AutoFillMissingData
+$ make
+```
+
+If you get errors in compilation, please check if the SDK's environment variables are set properly after setting up the SDK. If that does not solve it, open an issue here.
+If you are compiling in a GNU/Linux platform and used the standard defaults while setting up the SDK, the oxt file can be found at the location
+`/home/$username/libreoffice5.4_sdk/LINUXexample.out/bin/`
+
+
+Pull requests are always welcome. Happy hacking !
